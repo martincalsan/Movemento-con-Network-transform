@@ -72,6 +72,8 @@ public class PlayerMovement : NetworkBehaviour
 
         var pos = transform.position + new Vector3(input.x * Speed, _velocityY, input.y * Speed) * Time.deltaTime;
         pos.y = Mathf.Max(pos.y, GroundY);
+        pos.x = Mathf.Clamp(pos.x, -Bound, Bound);
+        pos.z = Mathf.Clamp(pos.z, -Bound, Bound);
 
         if (pos.y == GroundY && _velocityY < 0) _velocityY = 0f;
         transform.position = pos;
