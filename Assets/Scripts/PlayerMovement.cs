@@ -12,8 +12,8 @@ public class PlayerMovement : NetworkBehaviour
     const float GroundY = 0.5f;
     const float Bound   = 4.5f;
 
-    float _velocityY;       // servidor (modos 0 y 1)
-    float _localVelocityY;  // cliente (modos 1 y 2)
+    float _velocityY;
+    float _localVelocityY;  
 
     InputAction _moveAction;
     InputAction _jumpAction;
@@ -40,15 +40,21 @@ void Update()
 
     var input = _moveAction.ReadValue<Vector2>();
     bool jump  = _jumpAction.WasPressedThisFrame();
+    int mode   = GameManager.Instance?.Mode ?? 0;
 
-    switch (GameManager.Instance?.Mode ?? 0)
+    GetComponent<NetworkTransform>().enabled = mode != 2;
+
+    if (input == Vector2.zero && !jump && transform.position.y <= GroundY + 0.05f) return;
+
+    switch (mode)
     {
         case 0:
-            MoveServerRpc(input, jump);
+            if (input != Vector2.zero || jump || transform.position.y > GroundY + 0.05f)
+                MoveServerRpc(input, jump);
             break;
 
         case 1:
-            MoveServerRpc(input, jump);  // servidor mueve, NetworkTransform sincroniza
+            MoveServerRpc(input, jump);
             break;
 
         case 2:
@@ -58,7 +64,6 @@ void Update()
     }
 }
 
-    // Modos 0 y 1: servidor aplica física y opcionalmente corrige al cliente
     [ServerRpc]
     void MoveServerRpc(Vector2 input, bool jump)
     {
@@ -68,7 +73,6 @@ void Update()
             CorrectOwnerClientRpc(transform.position, _velocityY);
     }
 
-    // Modo 2: servidor recibe posición del cliente y la valida
     [ServerRpc]
     void SyncPositionServerRpc(Vector3 pos, float velocityY)
     {
@@ -78,7 +82,6 @@ void Update()
         _velocityY = velocityY;
     }
 
-    // Modo 1: servidor corrige al owner si diverge demasiado
     [ClientRpc]
     void CorrectOwnerClientRpc(Vector3 serverPos, float serverVelocityY)
     {
