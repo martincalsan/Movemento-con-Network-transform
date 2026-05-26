@@ -12,35 +12,19 @@ public class PlayerMovement : NetworkBehaviour
     const float GroundY = 0.5f;
     const float Bound   = 4.5f;
 
-    float _velocityY; // Autoridad del servidor
-    float _localVelocityY; // Predicción del cliente
-    
-    InputActionAsset _inputActions;
+    float _velocityY;       // servidor (modos 0 y 1)
+    float _localVelocityY;  // cliente (modos 1 y 2)
+
     InputAction _moveAction;
     InputAction _jumpAction;
 
-    void OnEnable()
-    {
-        if (_inputActions == null)
-            _inputActions = Resources.Load<InputActionAsset>("InputSystem_Actions");
-        _inputActions?.Enable();
-    }
-
-    void OnDisable()
-    {
-        _inputActions?.Disable();
-    }
-
     void Awake()
     {
-        if (_inputActions == null)
-            _inputActions = Resources.Load<InputActionAsset>("InputSystem_Actions");
-        
-        if (_inputActions != null)
-        {
-            _moveAction = _inputActions.FindAction("Player/Move");
-            _jumpAction = _inputActions.FindAction("Player/Jump");
-        }
+        var asset = Resources.Load<InputActionAsset>("InputSystem_Actions");
+        if (asset == null) return;
+        asset.Enable();
+        _moveAction = asset.FindAction("Player/Move");
+        _jumpAction = asset.FindAction("Player/Jump");
     }
 
     public override void OnNetworkSpawn()
@@ -50,104 +34,77 @@ public class PlayerMovement : NetworkBehaviour
                 Random.Range(-3f, 3f), GroundY, Random.Range(-3f, 3f));
     }
 
-    void Update()
+void Update()
+{
+    if (!IsOwner || _moveAction == null || _jumpAction == null) return;
+
+    var input = _moveAction.ReadValue<Vector2>();
+    bool jump  = _jumpAction.WasPressedThisFrame();
+
+    switch (GameManager.Instance?.Mode ?? 0)
     {
-        if (!IsOwner || _moveAction == null || _jumpAction == null) return;
+        case 0:
+            MoveServerRpc(input, jump);
+            break;
 
-        var input = _moveAction.ReadValue<Vector2>();
-        bool jump = _jumpAction.WasPressedThisFrame();
-        
-        int mode = GameManager.Instance?.Mode ?? 0;
-        
-        switch (mode)
-        {
-            case 0: // Server Authority
-                MoveServerRpc(input, jump);
-                break;
-            
-            case 1: // Server Authority con Prediction
-                UpdateLocalMovement(input, jump);
-                MoveServerRpc(input, jump);
-                break;
-            
-            case 2: // Client Authority
-                UpdateLocalMovement(input, jump);
-                SyncMovementClientRpc(transform.position, _localVelocityY);
-                break;
-        }
+        case 1:
+            MoveServerRpc(input, jump);  // servidor mueve, NetworkTransform sincroniza
+            break;
+
+        case 2:
+            ApplyMovement(input, jump, ref _localVelocityY);
+            SyncPositionServerRpc(transform.position, _localVelocityY);
+            break;
     }
+}
 
-    void UpdateLocalMovement(Vector2 input, bool jump)
-    {
-        bool grounded = transform.position.y <= GroundY + 0.05f;
-
-        if (grounded && jump)        _localVelocityY = Jump;
-        else if (grounded)           _localVelocityY = Mathf.Max(_localVelocityY, 0f);
-
-        _localVelocityY += Gravity * Time.deltaTime;
-
-        var pos = transform.position + new Vector3(input.x * Speed, _localVelocityY, input.y * Speed) * Time.deltaTime;
-        pos.y = Mathf.Max(pos.y, GroundY);
-        pos.x = Mathf.Clamp(pos.x, -Bound, Bound);
-        pos.z = Mathf.Clamp(pos.z, -Bound, Bound);
-
-        if (pos.y == GroundY && _localVelocityY < 0) _localVelocityY = 0f;
-        transform.position = pos;
-    }
-
+    // Modos 0 y 1: servidor aplica física y opcionalmente corrige al cliente
     [ServerRpc]
     void MoveServerRpc(Vector2 input, bool jump)
     {
-        int mode = GameManager.Instance?.Mode ?? 0;
-        
-        // En modo 0 y 1, el servidor aplica la física
-        if (mode == 0 || mode == 1)
-        {
-            ApplyMovement(input, jump);
-            
-            // En modo 1, sincronizar con el cliente
-            if (mode == 1)
-                SyncMovementClientRpc(transform.position, _velocityY);
-        }
-        // En modo 2 (client authority), el servidor no hace nada
+        ApplyMovement(input, jump, ref _velocityY);
+
+        if (GameManager.Instance?.Mode == 1)
+            CorrectOwnerClientRpc(transform.position, _velocityY);
     }
 
-    [ClientRpc]
-    void SyncMovementClientRpc(Vector3 position, float velocityY)
+    // Modo 2: servidor recibe posición del cliente y la valida
+    [ServerRpc]
+    void SyncPositionServerRpc(Vector3 pos, float velocityY)
     {
-        int mode = GameManager.Instance?.Mode ?? 0;
-        
-        if (mode == 1 && IsOwner)
+        pos.x = Mathf.Clamp(pos.x, -Bound, Bound);
+        pos.z = Mathf.Clamp(pos.z, -Bound, Bound);
+        transform.position = pos;
+        _velocityY = velocityY;
+    }
+
+    // Modo 1: servidor corrige al owner si diverge demasiado
+    [ClientRpc]
+    void CorrectOwnerClientRpc(Vector3 serverPos, float serverVelocityY)
+    {
+        if (!IsOwner) return;
+        if (Vector3.Distance(transform.position, serverPos) > 0.5f)
         {
-            // En predicción, sincronizar con la posición del servidor si hay mucha diferencia
-            if (Vector3.Distance(transform.position, position) > 0.5f)
-            {
-                transform.position = position;
-                _localVelocityY = velocityY;
-            }
-        }
-        else if (mode == 2 && !IsOwner)
-        {
-            // En client authority, otros clientes reciben la posición
-            transform.position = position;
+            transform.position  = serverPos;
+            _localVelocityY     = serverVelocityY;
         }
     }
 
-    void ApplyMovement(Vector2 input, bool jump)
+    void ApplyMovement(Vector2 input, bool jump, ref float velocityY)
     {
         bool grounded = transform.position.y <= GroundY + 0.05f;
 
-        if (grounded && jump)        _velocityY = Jump;
-        else if (grounded)           _velocityY = Mathf.Max(_velocityY, 0f);
+        if (grounded && jump)       velocityY = Jump;
+        else if (grounded)          velocityY = Mathf.Max(velocityY, 0f);
 
-        _velocityY += Gravity * Time.deltaTime;
+        velocityY += Gravity * Time.deltaTime;
 
-        var pos = transform.position + new Vector3(input.x * Speed, _velocityY, input.y * Speed) * Time.deltaTime;
+        var pos = transform.position + new Vector3(input.x * Speed, velocityY, input.y * Speed) * Time.deltaTime;
         pos.y = Mathf.Max(pos.y, GroundY);
         pos.x = Mathf.Clamp(pos.x, -Bound, Bound);
         pos.z = Mathf.Clamp(pos.z, -Bound, Bound);
 
-        if (pos.y == GroundY && _velocityY < 0) _velocityY = 0f;
+        if (pos.y == GroundY && velocityY < 0) velocityY = 0f;
         transform.position = pos;
     }
 }

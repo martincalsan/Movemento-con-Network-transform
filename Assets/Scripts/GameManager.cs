@@ -15,7 +15,7 @@ public class GameManager : NetworkBehaviour
     void OnGUI()
     {
         if (NetworkManager.Singleton == null) return;
-        
+
         if (!NetworkManager.Singleton.IsClient && !NetworkManager.Singleton.IsServer)
         {
             if (GUILayout.Button("Host"))   NetworkManager.Singleton.StartHost();
