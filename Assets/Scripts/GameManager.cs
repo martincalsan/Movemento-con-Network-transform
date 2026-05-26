@@ -6,7 +6,8 @@ public class GameManager : NetworkBehaviour
     public static GameManager Instance { get; private set; }
 
     readonly NetworkVariable<int> _mode = new(0);
-    
+    static readonly string[] ModeNames = { "Server Authority", "Server + Prediction", "Client Authority" };
+
     public int Mode => _mode.Value;
 
     void Awake() => Instance = this;
@@ -14,7 +15,7 @@ public class GameManager : NetworkBehaviour
     void OnGUI()
     {
         if (NetworkManager.Singleton == null) return;
-        
+
         if (!NetworkManager.Singleton.IsClient && !NetworkManager.Singleton.IsServer)
         {
             if (GUILayout.Button("Host"))   NetworkManager.Singleton.StartHost();
@@ -22,6 +23,8 @@ public class GameManager : NetworkBehaviour
             return;
         }
 
+        GUILayout.Label($"Modo: {ModeNames[_mode.Value]}");
+        if (GUILayout.Button("Cambiar Modo")) RequestModeChangeServerRpc();
     }
 
     [Rpc(SendTo.Server, InvokePermission = RpcInvokePermission.Everyone)]
